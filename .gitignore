@@ -17,3 +17,6 @@ include
 
 # pip
 pip-selfcheck.json
+
+# ipdb.gpu memory snapshots
+cuda-memory-*.pickle

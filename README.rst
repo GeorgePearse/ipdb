@@ -143,6 +143,71 @@ explicitly ask for ``stdout`` fiddling by using ``ipdb`` like this
             [...]
 
 
+PyTorch and GPU debugging
+-------------------------
+
+A Python debugger only sees the host side of a PyTorch program. CUDA kernel
+launches are asynchronous, so a device-side error is raised at whatever line
+the host happened to reach — not the line that caused it — and a breakpoint
+says nothing about what the GPU is doing.
+
+``ipdb.gpu`` addresses the two parts of that which have to be arranged
+*before* the failure.
+
+Run a script through the launcher
+
+.. code-block:: console
+
+        python -m ipdb.gpu your_script.py [args...]
+
+which sets ``CUDA_LAUNCH_BLOCKING=1`` before anything imports torch, starts
+recording CUDA allocation history as soon as torch loads, and dumps a memory
+snapshot on any uncaught exception before dropping into ``ipdb``.
+
+The timing matters. The CUDA runtime reads ``CUDA_LAUNCH_BLOCKING`` when it
+creates a context, so setting it after CUDA has initialised does nothing at
+all. In a real out-of-bounds indexing failure the difference is the traceback
+pointing at ``src[idx]`` rather than at the ``torch.cuda.synchronize()`` three
+lines later.
+
+Or enable it in-process, before the first CUDA call
+
+.. code-block:: python
+
+        import ipdb.gpu
+        ipdb.gpu.enable()
+
+``enable()`` reports whether ``CUDA_LAUNCH_BLOCKING`` actually took effect
+rather than assuming it did — if CUDA is already initialised it says so
+loudly, because believing launches are synchronous when they are not is worse
+than knowing they are asynchronous.
+
+Snapshots are written next to the process (or to ``snapshot_dir``, or the
+directory in ``IPDB_GPU_SNAPSHOT_DIR``) and open in the PyTorch memory
+viewer at https://pytorch.org/memory_viz, where each allocation carries the
+Python stack that made it.
+
+Other useful arguments to ``enable()``:
+
+``sync_debug_mode="warn"``
+    Report implicit host-device synchronisations — invaluable when chasing a
+    stall, noise otherwise, so it is off by default.
+
+``post_mortem=False``
+    Write the snapshot but do not open a debugger. Post-mortem is skipped
+    automatically when stdin is not a terminal, so unattended runs do not hang
+    on a prompt nobody can answer.
+
+``max_entries``
+    Bound on the recorded allocation history. Defaults to 100k rather than
+    torch's effectively-unlimited default, which on a long run spends real
+    memory to hold the history meant to diagnose running out of it.
+
+Everything degrades quietly: ``ipdb.gpu`` imports without torch installed,
+no-ops without a CUDA device, and a snapshot that cannot be written is
+reported rather than raised — it runs on the failure path, where the
+exception already in flight is worth more than the diagnostics.
+
 Development
 -----------
 
