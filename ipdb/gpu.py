@@ -345,10 +345,15 @@ class launch_ipdb_on_exception(object):
 
 
 def main(argv=None):
-    """``python -m ipdb.gpu your_script.py [args...]``
+    """``python -m ipdb.gpu [-m module | script.py] [args...]``
 
-    Sets CUDA_LAUNCH_BLOCKING before the target script — and therefore before
-    torch — is imported, which is the only way the variable reliably applies.
+    Sets CUDA_LAUNCH_BLOCKING before the target — and therefore before torch —
+    is imported, which is the only way the variable reliably applies.
+
+    The ``-m`` form exists so the target can itself be a runner that owns the
+    failure, such as ``-m pytest``, ``-m unittest`` or ``-m pdbtest``. Those
+    runners cannot set the variable themselves: by the time a test body runs,
+    torch is loaded and CUDA is initialised, so it would be read too late.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ("-h", "--help"):
@@ -356,18 +361,29 @@ def main(argv=None):
         return 2
 
     os.environ[LAUNCH_BLOCKING_ENV] = "1"
-    _log("%s=1 (set before the target script imports torch)" % LAUNCH_BLOCKING_ENV)
+    _log("%s=1 (set before the target imports torch)" % LAUNCH_BLOCKING_ENV)
 
-    script = argv[0]
-    sys.argv = argv
-    sys.path.insert(0, os.path.dirname(os.path.abspath(script)))
-
-    # Recording has to start after torch loads, so defer it to first use of a
-    # CUDA device rather than trying to guess when that happens.
     canonical = _canonical()
     canonical._install_deferred_recording()
     canonical.install_excepthook(post_mortem=True)
 
+    if argv[0] == "-m":
+        if len(argv) < 2:
+            print("-m requires a module name", file=sys.stderr)
+            return 2
+        module = argv[1]
+        sys.argv = argv[1:]
+        # Match `python -m`, which puts the working directory on the path.
+        sys.path.insert(0, os.getcwd())
+        try:
+            runpy.run_module(module, run_name="__main__", alter_sys=True)
+        except SystemExit:
+            raise
+        return 0
+
+    script = argv[0]
+    sys.argv = argv
+    sys.path.insert(0, os.path.dirname(os.path.abspath(script)))
     try:
         runpy.run_path(script, run_name="__main__")
     except SystemExit:

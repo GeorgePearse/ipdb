@@ -208,6 +208,59 @@ no-ops without a CUDA device, and a snapshot that cannot be written is
 reported rather than raised — it runs on the failure path, where the
 exception already in flight is worth more than the diagnostics.
 
+Debugging GPU test suites
+-------------------------
+
+The launcher takes ``-m`` as well as a script path, so the target can itself be
+a test runner that owns the failure
+
+.. code-block:: console
+
+        python -m ipdb.gpu -m pytest tests/test_model.py
+        python -m ipdb.gpu -m unittest tests.test_model
+        python -m ipdb.gpu -m pdbtest tests.test_model
+
+Nesting is not a convenience here, it is the only arrangement that works. A
+test runner cannot set ``CUDA_LAUNCH_BLOCKING`` for itself: by the time a test
+body executes, torch is loaded and CUDA is initialised, so the variable is
+read too late and launches stay asynchronous. Only the outer process can set
+it in time.
+
+The difference is easy to see. A unittest case that indexes a ten-element CUDA
+tensor at 9999, under ``pdbtest`` alone, drops the debugger into
+``torch/cuda/__init__.py`` at ``synchronize()`` — torch internals, several
+frames from anything you wrote. The same case under
+``python -m ipdb.gpu -m pdbtest`` drops it on the offending subscript in your
+own test. A snapshot of CUDA memory is written either way, before the prompt
+appears.
+
+`pdbtest <https://pypi.org/project/pdbtest/>`_ is a small shim that hooks the
+``unittest`` runner and launches a debugger when a test raises, printing the
+``TestCase`` and test method first. It composes well with this module because
+the two cover different halves of the problem: ``pdbtest`` decides *where* a
+failure is caught and what to call it, ``ipdb.gpu`` decides what is configured
+beforehand and what state is captured on the way down.
+
+It calls ``pdb`` directly rather than taking a debugger argument, so swapping
+in ``ipdb`` means rebinding the name it looks up
+
+.. code-block:: python
+
+        import ipdb, pdbtest.pdbtest
+        pdbtest.pdbtest.pdb = ipdb
+
+Two caveats before reaching for it. ``pdbtest`` was last released in 2019, and
+it only supports ``unittest`` — if the suite already runs under pytest, the
+``--pdb`` and ``--pdbcls`` options covered in `pytest`_ above do the same job
+with nothing to patch, and only need the outer launcher adding
+
+.. code-block:: console
+
+        python -m ipdb.gpu -m pytest --pdb tests/
+
+Either way it is the outer ``python -m ipdb.gpu`` doing the part that cannot
+be done from inside the runner.
+
 Development
 -----------
 
